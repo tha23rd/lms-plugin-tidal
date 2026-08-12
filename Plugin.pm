@@ -2,6 +2,7 @@ package Plugins::TIDAL::Plugin;
 
 use strict;
 use Async::Util;
+use Scalar::Util qw(blessed);
 
 use base qw(Slim::Plugin::OPMLBased);
 
@@ -14,6 +15,8 @@ use Plugins::TIDAL::API::Auth;
 use Plugins::TIDAL::ProtocolHandler;
 
 use constant MODULE_MATCH_REGEX => qr/MIX_LIST|MIXED_TYPES_LIST|PLAYLIST_LIST|ALBUM_LIST|TRACK_LIST|HORIZONTAL_LIST/;
+# how many tracks to add when the queue is running out - we're called again
+use constant DSTM_TRACK_COUNT => 20;
 
 my $log = Slim::Utils::Log->addLogCategory({
 	category     => 'plugin.tidal',
@@ -131,6 +134,11 @@ sub postinitPlugin {
 			require Plugins::TIDAL::LastMix;
 			Plugins::LastMix::Services->registerHandler('Plugins::TIDAL::LastMix', 'lossless');
 		}
+	}
+
+	if ( Slim::Utils::PluginManager->isEnabled('Slim::Plugin::DontStopTheMusic::Plugin') ) {
+		require Slim::Plugin::DontStopTheMusic::Plugin;
+		Slim::Plugin::DontStopTheMusic::Plugin->registerHandler('PLUGIN_TIDAL_TRACK_RADIO', \&dontStopTheMusic);
 	}
 }
 
@@ -617,6 +625,37 @@ sub getTrackRadio {
 			items => $items
 		} );
 	}, $params->{id});
+}
+
+# keep playing when the queue is running out, like the TIDAL app does: continue
+# with the radio of whatever track happens to be last in the queue
+sub dontStopTheMusic {
+	my ($client, $cb) = @_;
+
+	my $lastTrack = Slim::Player::Playlist::playList($client)->[-1];
+	# the playlist can hold track objects as well as plain URLs
+	my $url = blessed($lastTrack) ? $lastTrack->url : $lastTrack;
+	my $id  = $url ? Plugins::TIDAL::ProtocolHandler::getId($url) : undef;
+
+	# we can only seed the radio with a TIDAL track
+	if (!$id) {
+		main::INFOLOG && $log->is_info && $log->info("Last item in the queue is not a TIDAL track - not adding anything");
+		return $cb->($client);
+	}
+
+	getAPIHandler($client)->trackRadio(sub {
+		my $tracks = shift || [];
+		my $ct = Plugins::TIDAL::API::getFormat();
+
+		my $urls = [ map { "tidal://$_->{id}.$ct" } grep { $_->{id} } @$tracks ];
+
+		# don't flood the queue - we're called again once it's running out again
+		splice @$urls, DSTM_TRACK_COUNT if scalar @$urls > DSTM_TRACK_COUNT;
+
+		main::INFOLOG && $log->is_info && $log->info("Adding " . scalar(@$urls) . " tracks from the radio of track $id");
+
+		$cb->($client, $urls);
+	}, $id);
 }
 
 sub getMyMixes {

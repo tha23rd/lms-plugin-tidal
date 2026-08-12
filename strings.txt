@@ -356,3 +356,6 @@ PLUGIN_TIDAL_SHOW_ALL
 	FR	Montrer les deux versions des albums.
 	HU	Mutassa mindkettőt
 	NL	Toon beide
+
+PLUGIN_TIDAL_TRACK_RADIO
+	EN	TIDAL Track Radio
