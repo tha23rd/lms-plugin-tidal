@@ -8,7 +8,7 @@
       <creator>Michael Herger, philippe_44</creator>
       <link>https://github.com/tha23rd/lms-plugin-tidal</link>
       <url>https://github.com/tha23rd/lms-plugin-tidal/releases/download/1.8.1.1/TIDAL.zip</url>
-      <icon>https://raw.githubusercontent.com/tha23rd/lms-plugin-tidal/main/HTML/EN/plugins/TIDAL/html/tidal_MTL_svg_tidal.png</icon>
+      <icon>https://raw.githubusercontent.com/tha23rd/lms-plugin-tidal/favorites-date-order/HTML/EN/plugins/TIDAL/html/tidal_MTL_svg_tidal.png</icon>
       <desc lang="EN">TIDAL for local LMS use - collections listed newest first</desc>
     </plugin>
   </plugins>
