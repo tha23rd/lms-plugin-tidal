@@ -543,7 +543,8 @@ sub getCollectionPlaylists {
 	my ($self, $cb, $refresh) = @_;
 
 	my $userId = $self->userId || return $cb->();
-	my $cacheKey = "tidal_playlists:$userId";
+	# as in getFavorites(), the key must change with the order of what we store
+	my $cacheKey = "tidal_playlists2:$userId";
 
 	$refresh ||= $self->updatedPlaylists();
 	$self->updatedPlaylists(0);
@@ -554,7 +555,18 @@ sub getCollectionPlaylists {
 		$self->_get("/users/$userId/playlistsAndFavoritePlaylists", sub {
 			my $result = shift;
 
-			my $items = [ map { $_->{playlist} } @{$result->{items} || []} ] if $result;
+			my $items = [ map {
+				my $playlist = $_->{playlist};
+				# the collection knows when a playlist was added to it, the playlist
+				# itself only knows when it was created (see API::Sync)
+				my $added = $_->{created} || $playlist->{created};
+				$playlist->{added} = str2time($added) if $added;
+				$playlist;
+			} @{$result->{items} || []} ] if $result;
+
+			# unlike the favorites endpoints, this one isn't known to take the order
+			# parameters - so sort here, we have read the whole collection anyway
+			$items = [ sort { ($b->{added} || 0) <=> ($a->{added} || 0) } @$items ] if $items;
 
 			foreach my $playlist (@$items) {
 				next unless str2time($playlist->{lastUpdated}) > $timestamp;
