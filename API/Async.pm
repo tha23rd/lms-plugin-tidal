@@ -460,7 +460,9 @@ sub getFavorites {
 	return $cb->() unless $type;
 
 	my $userId = $self->userId || return $cb->();
-	my $cacheKey = "tidal_favs_$type:$userId";
+	# the key must be bumped whenever the order of the items we store changes,
+	# or we'd keep serving the previously (alphabetically) sorted collection
+	my $cacheKey = "tidal_favs2_$type:$userId";
 
 	# verify if that type has been updated and force refresh (don't confuse adding
 	# a playlist to favorites with changing the *content* of a playlist)
@@ -473,7 +475,17 @@ sub getFavorites {
 		$self->_get("/users/$userId/favorites/$type", sub {
 			my $result = shift;
 
-			my $items = [ map { $_->{item} } @{$result->{items} || []} ] if $result;
+			# keep track of when an item was added to the collection (see API::Sync)
+			my $items = [ map {
+				$_->{item}->{added} = str2time($_->{created}) if $_->{created};
+				$_->{item};
+			} @{$result->{items} || []} ] if $result;
+
+			# TIDAL should have sorted these already, but it doesn't always honour
+			# the order parameters - and paged results would be interleaved anyway
+			$items = [ sort { ($b->{added} || 0) <=> ($a->{added} || 0) } @$items ] if $items;
+
+			# must run after the sorting above, as it doesn't keep the 'added' value
 			$items = Plugins::TIDAL::API->cacheTrackMetadata($items) if $items && $type eq 'tracks';
 
 			# verify if playlists need to be invalidated
@@ -495,6 +507,9 @@ sub getFavorites {
 		},{
 			_nocache => 1,
 			limit => MAX_LIMIT,
+			# list the most recently added items first, rather than alphabetically
+			order => 'DATE',
+			orderDirection => 'DESC',
 		});
 	};
 

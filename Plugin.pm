@@ -549,7 +549,9 @@ sub getFavorites {
 	getAPIHandler($client)->getFavorites(sub {
 		my $items = shift;
 
-		$items = [ map { _renderItem($client, $_, { addArtistToTitle => 1, sorted => 1 }) } @$items ] if $items;
+		# no 'sorted' flag: favorites are ordered by date added, therefore an
+		# alphabetical text key would only produce a bogus jump index
+		$items = [ map { _renderItem($client, $_, { addArtistToTitle => 1 }) } @$items ] if $items;
 
 		$cb->( {
 			items => $items
