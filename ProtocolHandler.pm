@@ -42,9 +42,14 @@ sub getFormatForURL {
 	return Plugins::TIDAL::API::getFormat();
 }
 
-# formats we can hand to a player: the ones the quality settings ask for, plus
-# raw AAC in case TIDAL ever answers with that instead of AAC inside MP4
-my %PLAYABLE_FORMATS = map { $_ => 1 } qw(flc mp4 aac);
+# what we can hand to a player, and the codec we'd have to find inside it: an
+# audio/mp4 from TIDAL is either AAC, which players decode, or Dolby's E-AC-3,
+# which none of them do
+my %PLAYABLE_FORMATS = (
+	flc => qr/^flac/i,
+	mp4 => qr/^(?:mp4a|aac)/i,
+	aac => qr/^(?:mp4a|aac)/i,
+);
 
 sub formatOverride {
 	my ($class, $song) = @_;
@@ -184,6 +189,7 @@ sub getNextTrack {
 					audioquality => $prefs->get('quality'),
 					playbackmode => 'STREAM',
 					assetpresentation => 'FULL',
+					immersiveaudio => 'false',
 				});
 			},
 			sub {
@@ -197,6 +203,7 @@ sub getNextTrack {
 						audioquality => 'LOSSLESS',
 						playbackmode => 'STREAM',
 						assetpresentation => 'FULL',
+						immersiveaudio => 'false',
 					});
 
 					return;
@@ -222,23 +229,28 @@ sub getNextTrack {
 
 			my $streamUrl = $manifest->{urls}[0];
 			my ($format) = $manifest->{mimeType} =~ m|audio/(\w+)|;
+			my $codec = $manifest->{codecs} || '';
 			$format =~ s/flac/flc/;
 
 			# TODO - store album gain information
 
-			# TIDAL sometimes hands us a different format than the one we asked
-			# for: a few tracks only exist as AAC and come back as such even for
-			# a LOSSLESS request. We can play those - it is the very same stream
-			# the LOW/HIGH quality settings use - so adopt what we were given
-			# rather than failing the track. formatOverride() reads this back,
-			# and that is what drives the transcoding profile and the format the
+			# We ask TIDAL to leave immersive audio out of it, so we should now
+			# always get the format we asked for. Should that ever change,
+			# adopt whatever we were handed rather than failing the track - but
+			# only if a player can decode it. The container alone doesn't tell
+			# us that: an audio/mp4 from TIDAL is either AAC, which players
+			# handle, or Dolby's E-AC-3, which none of them do. Only the codec
+			# tells them apart. formatOverride() reads the format back, and
+			# that is what drives the transcoding profile and the format the
 			# player is told to decode.
 			my $adopted;
 
 			if ($format ne Plugins::TIDAL::API::getFormat) {
-				if (!$PLAYABLE_FORMATS{$format}) {
-					$log->error("did not get the expected format for $trackId ($format <> " . Plugins::TIDAL::API::getFormat() . ')');
-					return _gotTrackError("unexpected format $format", $errorCb);
+				my $playable = $PLAYABLE_FORMATS{$format};
+
+				if (!$playable || $codec !~ $playable) {
+					$log->error("did not get the expected format for $trackId ($format/$codec <> " . Plugins::TIDAL::API::getFormat() . ')');
+					return _gotTrackError("unexpected format $format ($codec)", $errorCb);
 				}
 
 				$log->warn("$trackId is only available as $format (asked for " . Plugins::TIDAL::API::getFormat() . '), playing it as such');
