@@ -219,10 +219,14 @@ sub getNextTrack {
 
 			# TODO - store album gain information
 
-			# this should not happen
+			# This should not happen - but TIDAL sometimes hands us a different
+			# format than the one we asked for (eg. AAC/mp4 instead of FLAC).
+			# That stream is not playable for us, and just carrying on leaves the
+			# player retrying it forever. Fail the track instead, so LMS reports
+			# the error and skips on to the next one.
 			if ($format ne Plugins::TIDAL::API::getFormat) {
-				$log->warn("did not get the expected format for $trackId ($format <> " . Plugins::TIDAL::API::getFormat() . ')');
-				$song->pluginData(format => $format);
+				$log->error("did not get the expected format for $trackId ($format <> " . Plugins::TIDAL::API::getFormat() . ')');
+				return _gotTrackError("unexpected format $format", $errorCb);
 			}
 
 			# main::INFOLOG && $log->info("got $format track at $streamUrl");
