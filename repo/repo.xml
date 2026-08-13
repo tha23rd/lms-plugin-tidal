@@ -1,13 +1,13 @@
 <?xml version='1.0' standalone='yes'?>
 <extensions>
   <plugins>
-    <plugin minTarget="8.3" version="1.8.1.3" name="TIDAL" maxTarget="*">
+    <plugin minTarget="8.3" version="1.8.1.4" name="TIDAL" maxTarget="*">
       <title lang="EN">TIDAL (favorites by date added)</title>
-      <sha>65f9afb113b655db71c40b235a7594adb7879f10</sha>
+      <sha>a89e8143eb18e446d3d29df45c2729b493b7f0aa</sha>
       <category>musicservices</category>
       <creator>Michael Herger, philippe_44</creator>
       <link>https://github.com/tha23rd/lms-plugin-tidal</link>
-      <url>https://github.com/tha23rd/lms-plugin-tidal/releases/download/1.8.1.3/TIDAL.zip</url>
+      <url>https://github.com/tha23rd/lms-plugin-tidal/releases/download/1.8.1.4/TIDAL.zip</url>
       <icon>https://raw.githubusercontent.com/tha23rd/lms-plugin-tidal/favorites-date-order/HTML/EN/plugins/TIDAL/html/tidal_MTL_svg_tidal.png</icon>
       <desc lang="EN">TIDAL for local LMS use - collections listed newest first</desc>
     </plugin>

@@ -49,4 +49,19 @@
 	[% WRAPPER setting title="PLUGIN_TIDAL_COUNTRY_CODE" desc="PLUGIN_TIDAL_COUNTRY_CODE_DESC" %]
 		<input class="stdedit" type="text" name="pref_countryCode" value="[% prefs.pref_countryCode | html %]" />
 	[% END %]
+
+	[% WRAPPER setting title="PLUGIN_TIDAL_DSTM_SEED_COUNT" desc="PLUGIN_TIDAL_DSTM_SEED_COUNT_DESC" %]
+		<select class="stdedit" name="pref_dstmSeedCount">
+		[% FOREACH entry IN [ 1, 2, 3, 4, 5 ] %]
+			<option [% IF entry == prefs.pref_dstmSeedCount %]selected[% END %] value="[% entry %]">[% entry %]</option>
+		[% END %]
+		</select>
+	[% END %]
+
+	[% WRAPPER setting title="PLUGIN_TIDAL_DSTM_DAILY_MIX" desc="PLUGIN_TIDAL_DSTM_DAILY_MIX_DESC" %]
+		<select class="stdedit" name="pref_dstmDailyMix">
+			<option [% IF prefs.pref_dstmDailyMix %]selected[% END %] value="1">[% "YES" | string %]</option>
+			<option [% IF !prefs.pref_dstmDailyMix %]selected[% END %] value="0">[% "NO" | string %]</option>
+		</select>
+	[% END %]
 [% PROCESS settings/footer.html %]

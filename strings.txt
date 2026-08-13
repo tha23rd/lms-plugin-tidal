@@ -359,3 +359,15 @@ PLUGIN_TIDAL_SHOW_ALL
 
 PLUGIN_TIDAL_TRACK_RADIO
 	EN	TIDAL Track Radio
+
+PLUGIN_TIDAL_DSTM_SEED_COUNT
+	EN	Don't Stop The Music: tracks to seed with
+
+PLUGIN_TIDAL_DSTM_SEED_COUNT_DESC
+	EN	When the queue runs out, TIDAL Track Radio keeps it going. Blend the radios of this many of the last tracks played, rather than following the very last track only. Nothing still in the queue is played again.
+
+PLUGIN_TIDAL_DSTM_DAILY_MIX
+	EN	Don't Stop The Music: add Daily Mix tracks
+
+PLUGIN_TIDAL_DSTM_DAILY_MIX_DESC
+	EN	Replace about every sixth of the tracks added with one from your TIDAL Daily Mixes, for a bit of variation the track radios wouldn't give you.

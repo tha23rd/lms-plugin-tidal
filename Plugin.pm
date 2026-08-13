@@ -17,6 +17,10 @@ use Plugins::TIDAL::ProtocolHandler;
 use constant MODULE_MATCH_REGEX => qr/MIX_LIST|MIXED_TYPES_LIST|PLAYLIST_LIST|ALBUM_LIST|TRACK_LIST|HORIZONTAL_LIST/;
 # how many tracks to add when the queue is running out - we're called again
 use constant DSTM_TRACK_COUNT => 20;
+# how many of the last played tracks we're willing to seed the radio with
+use constant DSTM_MAX_SEED_COUNT => 5;
+# replace every n-th track of the blend with a Daily Mix pick (~15%)
+use constant DSTM_MIX_EVERY => 6;
 
 my $log = Slim::Utils::Log->addLogCategory({
 	category     => 'plugin.tidal',
@@ -43,6 +47,8 @@ sub initPlugin {
 		quality => 'HIGH',
 		preferExplicit => 0,
 		countryCode => '',
+		dstmSeedCount => 3,
+		dstmDailyMix => 1,
 	});
 
 	# reset the API ref when a player changes user
@@ -56,6 +62,12 @@ sub initPlugin {
 		# countryCode must be empty or a 2-letter country code
 		return !defined $new || $new eq '' || $new =~ /^[A-Z]{2}$/i;
 	} }, 'countryCode');
+
+	$prefs->setValidate({ 'validator' => sub {
+		my $new = $_[1];
+		# we blend the radios of one to DSTM_MAX_SEED_COUNT tracks
+		return defined $new && $new =~ /^\d+$/ && $new >= 1 && $new <= DSTM_MAX_SEED_COUNT;
+	} }, 'dstmSeedCount');
 
 	Plugins::TIDAL::API::Auth->init();
 
@@ -627,35 +639,172 @@ sub getTrackRadio {
 	}, $params->{id});
 }
 
-# keep playing when the queue is running out, like the TIDAL app does: continue
-# with the radio of whatever track happens to be last in the queue
+# keep playing when the queue is running out, like the TIDAL app does. Following
+# a single track sends the queue wherever the very last track happened to point,
+# so we blend the radios of the last few tracks instead, leave out everything
+# we've just played, and optionally sprinkle in some Daily Mix tracks.
 sub dontStopTheMusic {
 	my ($client, $cb) = @_;
 
-	my $lastTrack = Slim::Player::Playlist::playList($client)->[-1];
-	# the playlist can hold track objects as well as plain URLs
-	my $url = blessed($lastTrack) ? $lastTrack->url : $lastTrack;
-	my $id  = $url ? Plugins::TIDAL::ProtocolHandler::getId($url) : undef;
+	my $playlist = Slim::Player::Playlist::playList($client) || [];
+
+	# LMS doesn't keep a play history, but whatever is in the queue is what we've
+	# just heard - that's our "don't play this again" list
+	my $queued = {};
+	# ... and the last few tracks of it are our seeds, most recent first
+	my $seeds = [];
+	my $seedCount = _dstmSeedCount();
+
+	foreach my $item (reverse @$playlist) {
+		# the playlist can hold track objects as well as plain URLs
+		my $url = blessed($item) ? $item->url : $item;
+		my $id  = $url ? Plugins::TIDAL::ProtocolHandler::getId($url) : undef;
+
+		# anything but a TIDAL track is of no use to us
+		next unless $id;
+
+		push @$seeds, $id if !$queued->{$id} && scalar @$seeds < $seedCount;
+		$queued->{$id}++;
+	}
 
 	# we can only seed the radio with a TIDAL track
-	if (!$id) {
-		main::INFOLOG && $log->is_info && $log->info("Last item in the queue is not a TIDAL track - not adding anything");
+	if (!scalar @$seeds) {
+		main::INFOLOG && $log->is_info && $log->info("No TIDAL track in the queue to seed the radio with - not adding anything");
 		return $cb->($client);
 	}
 
-	getAPIHandler($client)->trackRadio(sub {
-		my $tracks = shift || [];
-		my $ct = Plugins::TIDAL::API::getFormat();
+	main::INFOLOG && $log->is_info && $log->info("Seeding the radio with track(s) " . join(', ', @$seeds));
 
-		my $urls = [ map { "tidal://$_->{id}.$ct" } grep { $_->{id} } @$tracks ];
+	my $api = getAPIHandler($client);
+	my $radios = [];
+	my $pending = scalar @$seeds;
 
-		# don't flood the queue - we're called again once it's running out again
-		splice @$urls, DSTM_TRACK_COUNT if scalar @$urls > DSTM_TRACK_COUNT;
+	# fire all the radio requests at once and collect them in seed order - a seed
+	# which fails simply contributes nothing to the blend
+	foreach my $i (0 .. $#{$seeds}) {
+		$api->trackRadio(sub {
+			$radios->[$i] = shift || [];
 
-		main::INFOLOG && $log->is_info && $log->info("Adding " . scalar(@$urls) . " tracks from the radio of track $id");
+			return if --$pending > 0;
 
-		$cb->($client, $urls);
-	}, $id);
+			my $ids = _blendTrackLists($radios, $queued, DSTM_TRACK_COUNT);
+
+			# nothing to sprinkle into, or the user doesn't want us to
+			return _dstmAddTracks($client, $cb, $ids, $seeds) if !scalar @$ids || !$prefs->get('dstmDailyMix');
+
+			_dstmDailyMixTracks($client, sub {
+				my $mixIds = shift || [];
+
+				$ids = _sprinkleTrackIds($ids, $mixIds, DSTM_MIX_EVERY, $queued);
+
+				_dstmAddTracks($client, $cb, $ids, $seeds);
+			});
+		}, $seeds->[$i]);
+	}
+}
+
+sub _dstmSeedCount {
+	my $seedCount = $prefs->get('dstmSeedCount');
+	$seedCount = 3 unless defined $seedCount && $seedCount =~ /^\d+$/;
+
+	return $seedCount < 1 ? 1 : $seedCount > DSTM_MAX_SEED_COUNT ? DSTM_MAX_SEED_COUNT : $seedCount;
+}
+
+# round robin through the radio results (seed1[0], seed2[0], ..., seed1[1], ...)
+# so that no single seed can dominate what we're adding. Tracks we've seen
+# before - in another radio, or in the queue - are skipped.
+sub _blendTrackLists {
+	my ($lists, $exclude, $limit) = @_;
+
+	$lists = [ grep { ref $_ eq 'ARRAY' } @{$lists || []} ];
+
+	my %seen = map { $_ => 1 } keys %{$exclude || {}};
+	my $blended = [];
+	my $longest = 0;
+
+	foreach my $list (@$lists) {
+		$longest = scalar @$list if scalar @$list > $longest;
+	}
+
+	POSITION: foreach my $position (0..$longest - 1) {
+		foreach my $list (@$lists) {
+			# the lists can be of different length, and can have gaps
+			my $track = $list->[$position] || next;
+			my $id = ref $track ? $track->{id} : $track;
+
+			next unless $id;
+			next if $seen{$id}++;
+
+			push @$blended, $id;
+
+			# don't flood the queue - we're called again once it's running out again
+			last POSITION if scalar @$blended >= $limit;
+		}
+	}
+
+	return $blended;
+}
+
+# replace every n-th track of the blend with a track from the Daily Mixes: the
+# radios stay close to their seed, this is where something else can come in
+sub _sprinkleTrackIds {
+	my ($ids, $mixIds, $every, $exclude) = @_;
+
+	return $ids unless $every && $every > 0 && scalar @{$mixIds || []};
+
+	my %seen = map { $_ => 1 } (keys %{$exclude || {}}), @$ids;
+	my $picks = [ grep { $_ && !$seen{$_}++ } map { ref $_ ? $_->{id} : $_ } @$mixIds ];
+
+	return $ids unless scalar @$picks;
+
+	my $sprinkled = [ @$ids ];
+
+	for (my $position = $every - 1; $position < scalar @$sprinkled; $position += $every) {
+		last unless scalar @$picks;
+		$sprinkled->[$position] = shift @$picks;
+	}
+
+	return $sprinkled;
+}
+
+# the tracks of one of the user's Daily Mixes, picked at random. Any failure
+# here is none of DSTM's business - we just don't sprinkle anything in.
+sub _dstmDailyMixTracks {
+	my ($client, $cb) = @_;
+
+	my $api = getAPIHandler($client);
+
+	$api->myMixes(sub {
+		my $mixes = shift;
+		# we'd get an error hash rather than a list if the call failed
+		$mixes = ref $mixes eq 'ARRAY' ? [ grep { ref $_ && $_->{id} } @$mixes ] : [];
+
+		if (!scalar @$mixes) {
+			main::INFOLOG && $log->is_info && $log->info("No Daily Mix to pick tracks from");
+			return $cb->([]);
+		}
+
+		my $mix = $mixes->[rand @$mixes];
+
+		$api->mix(sub {
+			my $tracks = shift || [];
+
+			main::INFOLOG && $log->is_info && $log->info(sprintf('Got %s tracks from Daily Mix "%s"', scalar @$tracks, $mix->{title} || $mix->{id}));
+
+			$cb->([ map { $_->{id} } grep { ref $_ && $_->{id} } @$tracks ]);
+		}, $mix->{id});
+	});
+}
+
+sub _dstmAddTracks {
+	my ($client, $cb, $ids, $seeds) = @_;
+
+	my $ct = Plugins::TIDAL::API::getFormat();
+	my $urls = [ map { "tidal://$_.$ct" } @$ids ];
+
+	main::INFOLOG && $log->is_info && $log->info(sprintf('Adding %s tracks blended from the radios of %s', scalar @$urls, join(', ', @$seeds)));
+
+	$cb->($client, $urls);
 }
 
 sub getMyMixes {
