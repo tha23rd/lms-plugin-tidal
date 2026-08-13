@@ -233,6 +233,8 @@ sub getNextTrack {
 			# rather than failing the track. formatOverride() reads this back,
 			# and that is what drives the transcoding profile and the format the
 			# player is told to decode.
+			my $adopted;
+
 			if ($format ne Plugins::TIDAL::API::getFormat) {
 				if (!$PLAYABLE_FORMATS{$format}) {
 					$log->error("did not get the expected format for $trackId ($format <> " . Plugins::TIDAL::API::getFormat() . ')');
@@ -241,10 +243,25 @@ sub getNextTrack {
 
 				$log->warn("$trackId is only available as $format (asked for " . Plugins::TIDAL::API::getFormat() . '), playing it as such');
 				$song->pluginData(format => $format);
+				$adopted = 1;
 			}
 
 			# main::INFOLOG && $log->info("got $format track at $streamUrl");
 			$song->streamUrl($streamUrl);
+
+			# Don't scan the header of a track we only got as AAC. Scanning it
+			# makes LMS remember where the audio starts, stream from there and
+			# rebuild the MP4 header itself - something it can only hand to a
+			# player that fetches the stream on its own. When we proxy the
+			# stream instead (what enhanced HTTP does) that rebuilt header comes
+			# out empty and the player is left with raw AAC frames it cannot
+			# make sense of. Pass the file on exactly as TIDAL serves it and let
+			# the player read the real header; we know the duration anyway.
+			if ($adopted) {
+				my $meta = $cache->get('tidal_meta_' . $trackId);
+				Slim::Music::Info::setDuration($song->track, $meta->{duration}) if ref $meta && $meta->{duration};
+				return $successCb->();
+			}
 
 			# now try to acquire the header for seeking and various details
 			Slim::Utils::Scanner::Remote::parseRemoteHeader(
