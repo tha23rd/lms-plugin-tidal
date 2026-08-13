@@ -42,10 +42,17 @@ sub getFormatForURL {
 	return Plugins::TIDAL::API::getFormat();
 }
 
+# formats we can hand to a player: the ones the quality settings ask for, plus
+# raw AAC in case TIDAL ever answers with that instead of AAC inside MP4
+my %PLAYABLE_FORMATS = map { $_ => 1 } qw(flc mp4 aac);
+
 sub formatOverride {
 	my ($class, $song) = @_;
-	my $format = $song->pluginData('format') || Plugins::TIDAL::API::getFormat;
-	return $format =~ s/mp4/aac/r;
+	# LMS keeps this as $song->wantFormat and picks the transcoding profile from
+	# it. Report the container, not the codec inside it: for AAC that is what
+	# decides whether the player is told to expect an MP4 file or a raw ADTS
+	# stream, and TIDAL always sends MP4.
+	return $song->pluginData('format') || Plugins::TIDAL::API::getFormat();
 }
 
 # some TIDAL streams are compressed in a way which causes stutter on ip3k based players
@@ -219,14 +226,21 @@ sub getNextTrack {
 
 			# TODO - store album gain information
 
-			# This should not happen - but TIDAL sometimes hands us a different
-			# format than the one we asked for (eg. AAC/mp4 instead of FLAC).
-			# That stream is not playable for us, and just carrying on leaves the
-			# player retrying it forever. Fail the track instead, so LMS reports
-			# the error and skips on to the next one.
+			# TIDAL sometimes hands us a different format than the one we asked
+			# for: a few tracks only exist as AAC and come back as such even for
+			# a LOSSLESS request. We can play those - it is the very same stream
+			# the LOW/HIGH quality settings use - so adopt what we were given
+			# rather than failing the track. formatOverride() reads this back,
+			# and that is what drives the transcoding profile and the format the
+			# player is told to decode.
 			if ($format ne Plugins::TIDAL::API::getFormat) {
-				$log->error("did not get the expected format for $trackId ($format <> " . Plugins::TIDAL::API::getFormat() . ')');
-				return _gotTrackError("unexpected format $format", $errorCb);
+				if (!$PLAYABLE_FORMATS{$format}) {
+					$log->error("did not get the expected format for $trackId ($format <> " . Plugins::TIDAL::API::getFormat() . ')');
+					return _gotTrackError("unexpected format $format", $errorCb);
+				}
+
+				$log->warn("$trackId is only available as $format (asked for " . Plugins::TIDAL::API::getFormat() . '), playing it as such');
+				$song->pluginData(format => $format);
 			}
 
 			# main::INFOLOG && $log->info("got $format track at $streamUrl");
